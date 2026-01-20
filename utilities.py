@@ -8,7 +8,7 @@ from sklearn.linear_model import LinearRegression
 
 from scipy.interpolate import interp1d
 
-#from moepy import lowess
+from moepy import lowess
 from scipy.optimize import curve_fit # for power curve fitting
 import sys
 # appending a path with my modules
@@ -69,10 +69,9 @@ def clean_data(df, filtering_curve):
     print(f"Length after cleaning: {len(df_clean)}")
     return df_clean
 
-def fit_logistic_power_curve(df_in):
+def fit_logistic_power_curve(wind_speed, power, samples_per_bin=200, wind_range=(2,22)):
     """ Retruns parameters of optimal logistic ruve (L, k, x0) and coefficient of determination R2"""
-    df = df_in.copy()
-    wind_speed_uni, power_uni = get_uniform_windspeed_distribution(df)
+    wind_speed_uni, power_uni = get_uniform_windspeed_distribution(wind_speed, power, samples_per_bin=samples_per_bin, wind_range=wind_range)
     x0_guess = 7 # based on observation of the P(windSpeed)
     k0_guess = 1
     
@@ -93,18 +92,18 @@ def fit_logistic_power_curve(df_in):
     # Extract the fitted parameters
     L, k, x0 = params
     # drop nans for R2
-    non_nan_ids_all = (~df.WindSpeed.isna()) & (~df.ActivePower.isna())
-    wind_speed_R2 = df.WindSpeed[non_nan_ids_all].values
-    power_R2 = df.ActivePower[non_nan_ids_all].values
+    non_nan_ids_all = (~wind_speed.isna()) & (~power.isna())
+    wind_speed_R2 = wind_speed[non_nan_ids_all].values
+    power_R2 = power[non_nan_ids_all].values
     R2 = r2_score(power_R2, logistic(wind_speed_R2, L, k, x0))
     
     # Return the fitted parameters
     return [L, k, x0,], R2
 
-def fit_lowess_power_curve(df_in):
+def fit_lowess_power_curve(wind_speed, power, samples_per_bin=200, wind_range=(2,22)):
     """ Returns lowess model and R2 fit"""
-    df = df_in.copy()
-    wind_speed_uni, power_uni = get_uniform_windspeed_distribution(df)
+    df = pd.DataFrame({'WindSpeed': wind_speed, 'ActivePower': power})
+    wind_speed_uni, power_uni = get_uniform_windspeed_distribution(wind_speed, power, samples_per_bin=samples_per_bin, wind_range=wind_range)
 
     non_nan_ids = (~wind_speed_uni.isna()) & (~power_uni.isna())
     wind_speed_uni = wind_speed_uni[non_nan_ids]
@@ -113,19 +112,19 @@ def fit_lowess_power_curve(df_in):
     lowess_model.fit(wind_speed_uni.values, power_uni.values, frac=0.2, num_fits=100)
 
     # drop nans for R2
-    non_nan_ids_all = (~df.WindSpeed.isna()) & (~df.ActivePower.isna())
-    wind_speed_R2 = df.WindSpeed[non_nan_ids_all].values
-    power_R2 = df.ActivePower[non_nan_ids_all].values
+    non_nan_ids_all = (~wind_speed.isna()) & (~power.isna())
+    wind_speed_R2 = wind_speed[non_nan_ids_all].values
+    power_R2 = power[non_nan_ids_all].values
     R2 = r2_score(power_R2, lowess_model.predict(wind_speed_R2))
     return lowess_model, R2
-     
-def get_uniform_windspeed_distribution(df_in, samples_per_bin=200):
+
+def get_uniform_windspeed_distribution(wind_speed, power, samples_per_bin, wind_range):
     # Make sure we take equal samples per wind speed!
     # We are not interested in fitting the curve that will be influenced by the wind speed distribution!
-    df = df_in.copy()
+    df = pd.DataFrame({'WindSpeed': wind_speed, 'ActivePower': power})
     df['WindSpeedBin'] = df.WindSpeed//1 * 1
     df_uniform = []
-    for wind_bin in np.arange(2, 22):
+    for wind_bin in np.arange(wind_range[0], wind_range[1]):
         samples= df[df['WindSpeedBin']==wind_bin][['WindSpeed', 'ActivePower']].sample(samples_per_bin)
         df_uniform.append(samples)
     df_uniform = pd.concat(df_uniform).reset_index(drop=True)
@@ -167,22 +166,22 @@ def fit_power_curve_poly6(df):
 
     return poly6_model, R2
 
-def fit_power_curve_IEC(df, bin_size=0.5):
+def fit_power_curve_IEC(wind_speed, power, bin_size=0.5):
     # Create wind speed bins
-    bins = np.arange(0, df.WindSpeed.max() + bin_size, bin_size)
-    windSpeedBin = pd.cut(df.WindSpeed, bins=bins, right=False)
+    bins = np.arange(0, wind_speed.max() + bin_size, bin_size)
+    windSpeedBin = pd.cut(wind_speed, bins=bins, right=False)
 
     # Group by wind speed bin and calculate average power output
-    results = df.ActivePower.groupby(windSpeedBin).mean().reset_index()
+    results = power.groupby(windSpeedBin).mean().reset_index()
     results.columns = ['windSpeedBin', 'averagePowerOutput']
 
     # Create an interpolation function
     IEC_fit = interp1d(results['windSpeedBin'].apply(lambda x: x.left).values, results['averagePowerOutput'].values, 
                                         bounds_error=False)
     # drop nans for R2
-    non_nan_ids_all = (~df.WindSpeed.isna()) & (~df.ActivePower.isna())
-    wind_speed_R2 = df.WindSpeed[non_nan_ids_all].values
-    power_R2 = df.ActivePower[non_nan_ids_all].values
+    non_nan_ids_all = (~wind_speed.isna()) & (~power.isna())
+    wind_speed_R2 = wind_speed[non_nan_ids_all].values
+    power_R2 = power[non_nan_ids_all].values
 
     pred = IEC_fit(wind_speed_R2)
     non_nan_pred = ~np.isnan(pred)
